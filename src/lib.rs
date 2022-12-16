@@ -177,11 +177,12 @@ fn decode_texture<R: Read>(raw_section: RawSection, r: &mut R) -> Result<(RawTex
             if chunk_info.compressor == SecondStageCompressor::Snappy {
                 decoded_raw_data.append(
                     &mut decoder
-                        .decompress_vec(&buf[chunk_info.offset..chunk_info.offset + chunk_info.size])
+                        .decompress_vec(
+                            &buf[chunk_info.offset..chunk_info.offset + chunk_info.size],
+                        )
                         .map_err(Error::Snappy)?,
                 );
-            }
-            else {
+            } else {
                 decoded_raw_data.append(&mut buf);
             }
         }
@@ -209,7 +210,7 @@ fn wrap_single_texture(texture_format: u8, raw: RawTexture) -> Result<Texture, E
         0x01 => Texture::Alpha_RGTC1_BC4(raw),
         0x02 => Texture::RGBUnsignedFloat_BC6U(raw),
         0x03 => Texture::RGBSignedFloat_BC6S(raw),
-        _ => return Err(Error::UnknownTextureFormat(texture_format & 0x0f))
+        _ => return Err(Error::UnknownTextureFormat(texture_format & 0x0f)),
     })
 }
 
@@ -217,18 +218,20 @@ pub fn decode_frame<R: Read>(r: &mut R) -> Result<Texture, Error> {
     let raw_section = parse_section_header(r)?;
     if raw_section.section_type == 0x0d {
         let texture_section_header = parse_section_header(r)?;
-        if texture_section_header.header_size + texture_section_header.size as usize == raw_section.size as usize {
+        if texture_section_header.header_size + texture_section_header.size as usize
+            == raw_section.size as usize
+        {
             let (raw, texture_format) = decode_texture(texture_section_header, r)?;
             wrap_single_texture(texture_format, raw)
-        }
-        else {
+        } else {
             let (dxt5, _) = decode_texture(texture_section_header, r)?;
             let texture_section_header = parse_section_header(r)?;
             let (rgtc1, _) = decode_texture(texture_section_header, r)?;
-            Ok(Texture::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(dxt5, rgtc1))
+            Ok(Texture::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(
+                dxt5, rgtc1,
+            ))
         }
-    }
-    else {
+    } else {
         let (raw, texture_format) = decode_texture(raw_section, r)?;
         wrap_single_texture(texture_format, raw)
     }

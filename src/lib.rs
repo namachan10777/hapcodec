@@ -32,14 +32,42 @@ pub enum PixelCompression {
 
 #[allow(non_camel_case_types)]
 pub enum Texture {
+    /// GL_COMPRESSED_RGB_S3TC_DXT1_EXT
     RGB_DXT1_BC1(RawTexture),
+    /// GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
     RGBA_DXT5_BC3(RawTexture),
     ScaledYCoCg_DXT5_BC3(RawTexture),
+    /// GL_COMPRESSED_RGBA_BPTC_UNORM_ARB
     RGBA_BC7(RawTexture),
     Alpha_RGTC1_BC4(RawTexture),
+    /// GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT_ARB
     RGBUnsignedFloat_BC6U(RawTexture),
+    /// GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT_ARB
     RGBSignedFloat_BC6S(RawTexture),
     MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(RawTexture, RawTexture),
+}
+
+#[cfg(feature = "opengl")]
+pub enum OpenGLFormatId {
+    Single(gl::types::GLenum),
+    Double(gl::types::GLenum, gl::types::GLenum),
+    Unsupported,
+}
+
+impl Texture {
+    #[cfg(feature = "opengl")]
+    pub fn opengl_pixelformat_id(&self) -> OpenGLFormatId {
+        match self {
+            Self::RGB_DXT1_BC1(_) => OpenGLFormatId::Single(0x83F0),
+            Self::RGBA_DXT5_BC3(_) => OpenGLFormatId::Single(0x83F3),
+            Self::ScaledYCoCg_DXT5_BC3(_) => OpenGLFormatId::Unsupported,
+            Self::RGBA_BC7(_) => OpenGLFormatId::Single(0x8E8C),
+            Self::Alpha_RGTC1_BC4(_) => OpenGLFormatId::Unsupported,
+            Self::RGBUnsignedFloat_BC6U(_) => OpenGLFormatId::Single(0x8E8F),
+            Self::RGBSignedFloat_BC6S(_) => OpenGLFormatId::Single(0x8E8E),
+            Self::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(_, _) => OpenGLFormatId::Unsupported,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

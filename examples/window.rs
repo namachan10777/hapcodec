@@ -364,6 +364,10 @@ async fn main() -> anyhow::Result<()> {
             unimplemented!();
         };
 
+        let hapcodec::OpenGLFormatId::Single(texture_format_id) = frame.opengl_pixelformat_id() else {
+            unimplemented!()
+        };
+
         let hapcodec::Texture::RGB_DXT1_BC1(raw) = frame else {
             unimplemented!()
         };
@@ -371,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
         gl::CompressedTexImage2D(
             gl::TEXTURE_2D,
             0,
-            0x8c4c,
+            texture_format_id,
             width as i32,
             height as i32,
             0,

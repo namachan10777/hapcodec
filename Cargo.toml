@@ -7,15 +7,18 @@ edition = "2021"
 
 [dependencies]
 snap = "1.1.0"
+itertools = "0.10.5"
+byteorder = "1.4.3"
+thiserror = "1.0.37"
+
+[dev-dependencies]
 movparse = {git = "https://github.com/namachan10777/movparse"}
 tokio = { version = "1.23.0", features = ["io-util", "fs", "rt-multi-thread", "macros"] }
-byteorder = "1.4.3"
 clap = { version = "4.0.29", features = ["derive"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 anyhow = "1.0.66"
 serde_json = "1.0.89"
-thiserror = "1.0.37"
 gl = "0.14.0"
 glutin = "0.30.3"
 glfw = "0.47.0"

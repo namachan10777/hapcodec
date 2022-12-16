@@ -546,6 +546,7 @@ dependencies = [
  "glfw",
  "glutin",
  "image",
+ "itertools",
  "movparse",
  "serde_json",
  "snap",

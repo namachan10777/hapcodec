@@ -1,4 +1,7 @@
-use std::io::{self, Read};
+use std::{
+    fmt::Debug,
+    io::{self, Read},
+};
 
 use byteorder::{ReadBytesExt, LE};
 
@@ -52,6 +55,57 @@ pub enum OpenGLFormatId {
     Single(gl::types::GLenum),
     Double(gl::types::GLenum, gl::types::GLenum),
     Unsupported,
+}
+
+impl Debug for Texture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("Texture");
+        match self {
+            Self::RGB_DXT1_BC1(inner) => s
+                .field("color", &"RGB")
+                .field("compression", &"DXT1/BC1")
+                .field("size", &inner.len())
+                .finish(),
+            Self::RGBA_DXT5_BC3(inner) => s
+                .field("color", &"RGBA")
+                .field("compression", &"DXT5/BC3")
+                .field("size", &inner.len())
+                .finish(),
+            Self::ScaledYCoCg_DXT5_BC3(inner) => s
+                .field("color", &"ScaledYCoCg")
+                .field("compression", &"DXT5/BC3")
+                .field("size", &inner.len())
+                .finish(),
+            Self::RGBA_BC7(inner) => s
+                .field("color", &"RGBA")
+                .field("compression", &"BC7")
+                .field("size", &inner.len())
+                .finish(),
+            Self::Alpha_RGTC1_BC4(inner) => s
+                .field("color", &"Alpha")
+                .field("compression", &"RGTC1/BC4")
+                .field("size", &inner.len())
+                .finish(),
+            Self::RGBUnsignedFloat_BC6U(inner) => s
+                .field("color", &"RGB unsigned float")
+                .field("compression", &"BC6U")
+                .field("size", &inner.len())
+                .finish(),
+            Self::RGBSignedFloat_BC6S(inner) => s
+                .field("color", &"RGB signed float")
+                .field("compression", &"BC6S")
+                .field("size", &inner.len())
+                .finish(),
+            Self::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(inner1, inner2) => s
+                .field("color1", &"ScaledYCoCg")
+                .field("color2", &"Alpha")
+                .field("compression1", &"DXT5/BC3")
+                .field("compression2", &"BC4")
+                .field("size1", &inner1.len())
+                .field("size2", &inner2.len())
+                .finish(),
+        }
+    }
 }
 
 impl Texture {

@@ -50,6 +50,34 @@ pub enum Texture {
     MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(RawTexture, RawTexture),
 }
 
+impl Texture {
+    pub fn get_single_texture_raw_data(self) -> Option<RawTexture> {
+        match self {
+            Self::RGB_DXT1_BC1(inner) => Some(inner),
+            Self::RGBA_DXT5_BC3(inner) => Some(inner),
+            Self::ScaledYCoCg_DXT5_BC3(inner) => Some(inner),
+            Self::RGBA_BC7(inner) => Some(inner),
+            Self::Alpha_RGTC1_BC4(inner) => Some(inner),
+            Self::RGBUnsignedFloat_BC6U(inner) => Some(inner),
+            Self::RGBSignedFloat_BC6S(inner) => Some(inner),
+            Self::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(_, _) => None,
+        }
+    }
+
+    pub fn get_single_texture_raw_data_ref(&self) -> Option<&[u8]> {
+        match self {
+            Self::RGB_DXT1_BC1(inner) => Some(inner.as_ref()),
+            Self::RGBA_DXT5_BC3(inner) => Some(inner.as_ref()),
+            Self::ScaledYCoCg_DXT5_BC3(inner) => Some(inner.as_ref()),
+            Self::RGBA_BC7(inner) => Some(inner.as_ref()),
+            Self::Alpha_RGTC1_BC4(inner) => Some(inner.as_ref()),
+            Self::RGBUnsignedFloat_BC6U(inner) => Some(inner.as_ref()),
+            Self::RGBSignedFloat_BC6S(inner) => Some(inner.as_ref()),
+            Self::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(_, _) => None,
+        }
+    }
+}
+
 #[cfg(feature = "opengl")]
 pub enum OpenGLFormatId {
     Single(gl::types::GLenum),
@@ -108,8 +136,8 @@ impl Debug for Texture {
     }
 }
 
+#[cfg(feature = "opengl")]
 impl Texture {
-    #[cfg(feature = "opengl")]
     pub fn opengl_pixelformat_id(&self) -> OpenGLFormatId {
         match self {
             Self::RGB_DXT1_BC1(_) => OpenGLFormatId::Single(0x83F0),
@@ -120,6 +148,23 @@ impl Texture {
             Self::RGBUnsignedFloat_BC6U(_) => OpenGLFormatId::Single(0x8E8F),
             Self::RGBSignedFloat_BC6S(_) => OpenGLFormatId::Single(0x8E8E),
             Self::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(_, _) => OpenGLFormatId::Unsupported,
+        }
+    }
+}
+
+#[cfg(feature = "glium")]
+impl Texture {
+    pub fn glium_compressed_format(&self) -> Option<glium::texture::CompressedFormat> {
+        use glium::texture::CompressedFormat as Fmt;
+        match self {
+            Self::RGB_DXT1_BC1(_) => Some(Fmt::S3tcDxt1NoAlpha),
+            Self::RGBA_DXT5_BC3(_) => Some(Fmt::S3tcDxt5Alpha),
+            Self::ScaledYCoCg_DXT5_BC3(_) => None,
+            Self::RGBA_BC7(_) => None,
+            Self::Alpha_RGTC1_BC4(_) => None,
+            Self::RGBUnsignedFloat_BC6U(_) => Some(Fmt::BptcUnsignedFloat3),
+            Self::RGBSignedFloat_BC6S(_) => Some(Fmt::BptcSignedFloat3),
+            Self::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(_, _) => None,
         }
     }
 }
@@ -141,13 +186,13 @@ pub struct Header {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("unknown compressor")]
+    #[error("unknown compressor {0}")]
     UnknownCompressor(u8),
-    #[error("unknown texture format")]
+    #[error("unknown texture format {0}")]
     UnknownTextureFormat(u8),
     #[error("IO error {0}")]
     Io(io::Error),
-    #[error("unknown decode instruction")]
+    #[error("unknown decode instruction {0}")]
     UnknownDecodeInstruction(u8),
     #[error("failed to decompress due to {0}")]
     Snappy(snap::Error),

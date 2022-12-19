@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["opengl"]
 opengl = ["gl"]
+glium = ["dep:glium"]
 
 [dependencies]
 snap = "1.1.0"
@@ -15,16 +15,4 @@ itertools = "0.10.5"
 byteorder = "1.4.3"
 thiserror = "1.0.37"
 gl = {version="0.14.0", optional=true}
-
-[dev-dependencies]
-movparse = {git = "https://github.com/namachan10777/movparse"}
-tokio = { version = "1.23.0", features = ["io-util", "fs", "rt-multi-thread", "macros"] }
-clap = { version = "4.0.29", features = ["derive"] }
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-anyhow = "1.0.66"
-serde_json = "1.0.89"
-glutin = "0.30.3"
-glfw = "0.47.0"
-cgmath = "0.18.0"
-image = "0.24.5"
+glium = {version="0.32.0", features=["unstable"], optional=true}

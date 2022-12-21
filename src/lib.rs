@@ -4,7 +4,8 @@ use std::{
 };
 
 use byteorder::{ReadBytesExt, LE};
-use tracing::{debug, warn};
+use itertools::Itertools;
+use tracing::{debug, error, warn};
 
 const HAP_SECITON_CHUNK_SECOND_STAGE_COMPRESSOR_TABLE: u8 = 0x02;
 const HAP_SECTION_CHUNK_SIZE_TABLE: u8 = 0x03;
@@ -197,6 +198,8 @@ pub enum Error {
     UnknownDecodeInstruction(u8),
     #[error("failed to decompress due to {0}")]
     Snappy(snap::Error),
+    #[error("internal thread problem")]
+    InternalThreadProblem,
 }
 
 impl From<io::Error> for Error {
@@ -209,6 +212,12 @@ struct RawSection {
     size: u32,
     section_type: u8,
     header_size: usize,
+}
+
+struct ChunkInfo {
+    offset: usize,
+    size: usize,
+    compressor: SecondStageCompressor,
 }
 
 fn parse_section_header<R: Read>(r: &mut R) -> io::Result<RawSection> {
@@ -240,108 +249,6 @@ fn decode_second_stage_compressor(compressor: u8) -> Result<SecondStageCompresso
     }
 }
 
-struct ChunkInfo {
-    offset: usize,
-    size: usize,
-    compressor: SecondStageCompressor,
-}
-
-fn decode_complex_instruction<R: Read>(r: &mut R) -> Result<(usize, Vec<ChunkInfo>), Error> {
-    let complex_header = parse_section_header(r)?;
-    let mut bytestreaming = complex_header.size as usize;
-    let mut compressors = Vec::new();
-    let mut chunk_sizes = Vec::new();
-    let mut chunk_offsets = Vec::new();
-    while bytestreaming != 0 {
-        let instruction_header = parse_section_header(r)?;
-        bytestreaming -= instruction_header.header_size + instruction_header.size as usize;
-        let mut buf = Vec::new();
-        buf.resize(instruction_header.size as usize, 0);
-        r.read_exact(&mut buf)?;
-        match instruction_header.section_type {
-            HAP_SECITON_CHUNK_SECOND_STAGE_COMPRESSOR_TABLE => {
-                debug!("second stage compressor table buf: {:?}", buf);
-                compressors = buf
-                    .into_iter()
-                    .map(decode_second_stage_compressor)
-                    .collect::<Result<Vec<_>, _>>()?;
-            }
-            HAP_SECTION_CHUNK_OFFSET_TABLE => {
-                debug!("chunk offset table buf: {:?}", buf);
-                for mut chunk_offset in buf.chunks(4) {
-                    chunk_offsets.push(chunk_offset.read_u32::<LE>()?);
-                }
-            }
-            HAP_SECTION_CHUNK_SIZE_TABLE => {
-                debug!("chunk size table: {:?}", buf);
-                for mut chunk_size in buf.chunks(4) {
-                    chunk_sizes.push(chunk_size.read_u32::<LE>()?);
-                }
-            }
-            _ => (),
-        };
-    }
-    let mut chunks = Vec::new();
-    let mut size_subtotal = 0;
-    for chunk_idx in 0..chunk_sizes.len() {
-        let offset = if chunk_offsets.is_empty() {
-            size_subtotal
-        } else {
-            chunk_offsets[chunk_idx]
-        } as usize;
-        size_subtotal += chunk_sizes[chunk_idx];
-        chunks.push(ChunkInfo {
-            size: chunk_sizes[chunk_idx] as usize,
-            compressor: compressors[chunk_idx],
-            offset,
-        });
-    }
-    Ok((
-        complex_header.header_size + complex_header.size as usize,
-        chunks,
-    ))
-}
-
-fn decode_texture<R: Read>(raw_section: RawSection, r: &mut R) -> Result<(RawTexture, u8), Error> {
-    let mut decoded_raw_data = Vec::new();
-    if raw_section.section_type & 0xF0 == 0xC0 {
-        let (consumed_size, chunk_infos) = decode_complex_instruction(r)?;
-        let mut buf = Vec::new();
-        buf.resize(raw_section.size as usize - consumed_size, 0);
-        r.read_exact(&mut buf)?;
-        for chunk_info in chunk_infos {
-            let mut decoder = snap::raw::Decoder::new();
-            if chunk_info.compressor == SecondStageCompressor::Snappy {
-                decoded_raw_data.append(
-                    &mut decoder
-                        .decompress_vec(
-                            &buf[chunk_info.offset..chunk_info.offset + chunk_info.size],
-                        )
-                        .map_err(Error::Snappy)?,
-                );
-            } else {
-                decoded_raw_data.append(&mut buf);
-            }
-        }
-    } else if raw_section.section_type & 0xF0 == 0xA0 {
-        decoded_raw_data.resize(raw_section.size as usize, 0);
-        r.read_exact(&mut decoded_raw_data)?;
-    } else if raw_section.section_type & 0xF0 == 0xB0 {
-        let mut buf = Vec::new();
-        buf.resize(raw_section.size as usize, 0);
-        r.read_exact(&mut buf)?;
-        let mut decoder = snap::raw::Decoder::new();
-        decoded_raw_data = decoder.decompress_vec(&buf).map_err(Error::Snappy)?;
-    } else {
-        warn!(
-            "unknown compressor {} on texture",
-            raw_section.section_type & 0xf0
-        );
-        return Err(Error::UnknownCompressor(raw_section.section_type & 0xF0));
-    }
-    Ok((decoded_raw_data, raw_section.section_type & 0x0F))
-}
-
 fn wrap_single_texture(texture_format: u8, raw: RawTexture) -> Result<Texture, Error> {
     Ok(match texture_format & 0x0f {
         0x0b => Texture::RGB_DXT1_BC1(raw),
@@ -355,25 +262,220 @@ fn wrap_single_texture(texture_format: u8, raw: RawTexture) -> Result<Texture, E
     })
 }
 
-pub fn decode_frame<R: Read>(r: &mut R) -> Result<Texture, Error> {
-    let raw_section = parse_section_header(r)?;
-    if raw_section.section_type == 0x0d {
-        let texture_section_header = parse_section_header(r)?;
-        if texture_section_header.header_size + texture_section_header.size as usize
-            == raw_section.size as usize
-        {
-            let (raw, texture_format) = decode_texture(texture_section_header, r)?;
-            wrap_single_texture(texture_format, raw)
-        } else {
-            let (dxt5, _) = decode_texture(texture_section_header, r)?;
-            let texture_section_header = parse_section_header(r)?;
-            let (rgtc1, _) = decode_texture(texture_section_header, r)?;
-            Ok(Texture::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(
-                dxt5, rgtc1,
-            ))
+#[cfg(not(feature = "threadpool"))]
+pub struct Decoder;
+
+#[cfg(not(feature = "threadpool"))]
+impl Decoder {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(feature = "threadpool")]
+pub struct Decoder {
+    tx: std::sync::mpsc::Sender<(uuid::Uuid, Vec<u8>)>,
+    rx: std::sync::mpsc::Receiver<(uuid::Uuid, Result<Vec<u8>, snap::Error>)>,
+}
+
+#[cfg(feature = "threadpool")]
+impl Decoder {
+    pub fn new(thread_size: u64) -> Self {
+        use std::{
+            sync::{mpsc, Arc, Mutex},
+            thread::spawn,
+        };
+        let (raw_tx, raw_rx) = mpsc::channel::<(uuid::Uuid, Vec<u8>)>();
+        let (decompressed_tx, decompressed_rx) = mpsc::channel();
+        let raw_rx = Arc::new(Mutex::new(raw_rx));
+        (0..thread_size).into_iter().for_each(|_| {
+            let raw_rx = raw_rx.clone();
+            let decompressed_tx = decompressed_tx.clone();
+            spawn(move || {
+                let mut decoder = snap::raw::Decoder::new();
+                loop {
+                    match raw_rx.lock().unwrap().recv() {
+                        Ok((uuid, raw)) => {
+                            let decompressed = decoder.decompress_vec(&raw);
+                            decompressed_tx.send((uuid, decompressed)).unwrap()
+                        }
+                        Err(e) => error!("{}", e),
+                    }
+                }
+            });
+        });
+        Self {
+            tx: raw_tx,
+            rx: decompressed_rx,
         }
-    } else {
-        let (raw, texture_format) = decode_texture(raw_section, r)?;
-        wrap_single_texture(texture_format, raw)
+    }
+}
+
+impl Decoder {
+    fn decode_complex_instruction<R: Read>(
+        &self,
+        r: &mut R,
+    ) -> Result<(usize, Vec<ChunkInfo>), Error> {
+        let complex_header = parse_section_header(r)?;
+        let mut bytestreaming = complex_header.size as usize;
+        let mut compressors = Vec::new();
+        let mut chunk_sizes = Vec::new();
+        let mut chunk_offsets = Vec::new();
+        while bytestreaming != 0 {
+            let instruction_header = parse_section_header(r)?;
+            bytestreaming -= instruction_header.header_size + instruction_header.size as usize;
+            let mut buf = Vec::new();
+            buf.resize(instruction_header.size as usize, 0);
+            r.read_exact(&mut buf)?;
+            match instruction_header.section_type {
+                HAP_SECITON_CHUNK_SECOND_STAGE_COMPRESSOR_TABLE => {
+                    debug!("second stage compressor table buf: {:?}", buf);
+                    compressors = buf
+                        .into_iter()
+                        .map(decode_second_stage_compressor)
+                        .collect::<Result<Vec<_>, _>>()?;
+                }
+                HAP_SECTION_CHUNK_OFFSET_TABLE => {
+                    debug!("chunk offset table buf: {:?}", buf);
+                    for mut chunk_offset in buf.chunks(4) {
+                        chunk_offsets.push(chunk_offset.read_u32::<LE>()?);
+                    }
+                }
+                HAP_SECTION_CHUNK_SIZE_TABLE => {
+                    debug!("chunk size table: {:?}", buf);
+                    for mut chunk_size in buf.chunks(4) {
+                        chunk_sizes.push(chunk_size.read_u32::<LE>()?);
+                    }
+                }
+                _ => (),
+            };
+        }
+        let mut chunks = Vec::new();
+        let mut size_subtotal = 0;
+        for chunk_idx in 0..chunk_sizes.len() {
+            let offset = if chunk_offsets.is_empty() {
+                size_subtotal
+            } else {
+                chunk_offsets[chunk_idx]
+            } as usize;
+            size_subtotal += chunk_sizes[chunk_idx];
+            chunks.push(ChunkInfo {
+                size: chunk_sizes[chunk_idx] as usize,
+                compressor: compressors[chunk_idx],
+                offset,
+            });
+        }
+        Ok((
+            complex_header.header_size + complex_header.size as usize,
+            chunks,
+        ))
+    }
+
+    fn decode_texture<R: Read>(
+        &self,
+        raw_section: RawSection,
+        r: &mut R,
+    ) -> Result<(RawTexture, u8), Error> {
+        let mut decoded_raw_data = Vec::new();
+        if raw_section.section_type & 0xF0 == 0xC0 {
+            let (consumed_size, chunk_infos) = self.decode_complex_instruction(r)?;
+            let mut buf = Vec::new();
+            buf.resize(raw_section.size as usize - consumed_size, 0);
+            r.read_exact(&mut buf)?;
+            #[cfg(not(feature = "threadpool"))]
+            for chunk_info in chunk_infos {
+                let mut decoder = snap::raw::Decoder::new();
+                if chunk_info.compressor == SecondStageCompressor::Snappy {
+                    decoded_raw_data.append(
+                        &mut decoder
+                            .decompress_vec(
+                                &buf[chunk_info.offset..chunk_info.offset + chunk_info.size],
+                            )
+                            .map_err(Error::Snappy)?,
+                    );
+                } else {
+                    decoded_raw_data.append(&mut buf);
+                }
+            }
+            #[cfg(feature = "threadpool")]
+            {
+                let mut indices = Vec::new();
+                let mut buffer = Vec::new();
+                buffer.resize_with(chunk_infos.len(), Vec::new);
+                let mut queued_count = 0;
+                for chunk_info in chunk_infos {
+                    let id = uuid::Uuid::new_v4();
+                    indices.push(id);
+                    if chunk_info.compressor == SecondStageCompressor::Snappy {
+                        self.tx
+                            .send((
+                                id,
+                                buf[chunk_info.offset..chunk_info.offset + chunk_info.size]
+                                    .to_vec(),
+                            ))
+                            .map_err(|_| Error::InternalThreadProblem)?;
+                        queued_count += 1;
+                    } else {
+                        let (idx, _) = indices
+                            .iter()
+                            .find_position(|id_in_indices| id_in_indices == &&id)
+                            .unwrap();
+                        buffer[idx] =
+                            buf[chunk_info.offset..chunk_info.offset + chunk_info.size].to_vec();
+                    }
+                }
+                for _ in 0..queued_count {
+                    let (id, decompressed) =
+                        self.rx.recv().map_err(|_| Error::InternalThreadProblem)?;
+                    let (idx, _) = indices
+                        .iter()
+                        .find_position(|id_in_indices| id_in_indices == &&id)
+                        .unwrap();
+                    buffer[idx] = decompressed.map_err(Error::Snappy)?;
+                }
+                for mut buf in buffer {
+                    decoded_raw_data.append(&mut buf);
+                }
+            }
+        } else if raw_section.section_type & 0xF0 == 0xA0 {
+            decoded_raw_data.resize(raw_section.size as usize, 0);
+            r.read_exact(&mut decoded_raw_data)?;
+        } else if raw_section.section_type & 0xF0 == 0xB0 {
+            let mut buf = Vec::new();
+            buf.resize(raw_section.size as usize, 0);
+            r.read_exact(&mut buf)?;
+            let mut decoder = snap::raw::Decoder::new();
+            decoded_raw_data = decoder.decompress_vec(&buf).map_err(Error::Snappy)?;
+        } else {
+            warn!(
+                "unknown compressor {} on texture",
+                raw_section.section_type & 0xf0
+            );
+            return Err(Error::UnknownCompressor(raw_section.section_type & 0xF0));
+        }
+        Ok((decoded_raw_data, raw_section.section_type & 0x0F))
+    }
+
+    pub fn decode_frame<R: Read>(&self, r: &mut R) -> Result<Texture, Error> {
+        let raw_section = parse_section_header(r)?;
+        if raw_section.section_type == 0x0d {
+            let texture_section_header = parse_section_header(r)?;
+            if texture_section_header.header_size + texture_section_header.size as usize
+                == raw_section.size as usize
+            {
+                let (raw, texture_format) = self.decode_texture(texture_section_header, r)?;
+                wrap_single_texture(texture_format, raw)
+            } else {
+                let (dxt5, _) = self.decode_texture(texture_section_header, r)?;
+                let texture_section_header = parse_section_header(r)?;
+                let (rgtc1, _) = self.decode_texture(texture_section_header, r)?;
+                Ok(Texture::MultipleImages_ScaledYCoCg_DXT5_Alpha_RGTC1(
+                    dxt5, rgtc1,
+                ))
+            }
+        } else {
+            let (raw, texture_format) = self.decode_texture(raw_section, r)?;
+            wrap_single_texture(texture_format, raw)
+        }
     }
 }

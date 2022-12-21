@@ -6,8 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+default = ["threadpool"]
 opengl = ["gl"]
 glium = ["dep:glium"]
+threadpool = ["uuid"]
 
 [dependencies]
 snap = "1.1.0"
@@ -17,3 +19,4 @@ thiserror = "1.0.37"
 gl = {version="0.14.0", optional=true}
 glium = {version="0.32.0", features=["unstable"], optional=true}
 tracing = "0.1"
+uuid = { version = "1", features = ["v4"], optional=true }

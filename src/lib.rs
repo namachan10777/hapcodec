@@ -352,6 +352,7 @@ impl Decoder {
         }
         let mut chunks = Vec::new();
         let mut size_subtotal = 0;
+        debug!("chunk size: {}", chunk_sizes.len());
         for chunk_idx in 0..chunk_sizes.len() {
             let offset = if chunk_offsets.is_empty() {
                 size_subtotal

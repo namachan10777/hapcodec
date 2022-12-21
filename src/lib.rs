@@ -4,6 +4,7 @@ use std::{
 };
 
 use byteorder::{ReadBytesExt, LE};
+use tracing::{debug, warn};
 
 const HAP_SECITON_CHUNK_SECOND_STAGE_COMPRESSOR_TABLE: u8 = 0x02;
 const HAP_SECTION_CHUNK_SIZE_TABLE: u8 = 0x03;
@@ -226,10 +227,16 @@ fn parse_section_header<R: Read>(r: &mut R) -> io::Result<RawSection> {
 }
 
 fn decode_second_stage_compressor(compressor: u8) -> Result<SecondStageCompressor, Error> {
-    match compressor & 0xF0 {
-        0xA0 => Ok(SecondStageCompressor::None),
-        0xB0 => Ok(SecondStageCompressor::Snappy),
-        unknown => Err(Error::UnknownCompressor(unknown)),
+    match compressor {
+        0x0A => Ok(SecondStageCompressor::None),
+        0x0B => Ok(SecondStageCompressor::Snappy),
+        unknown => {
+            warn!(
+                "unknown compressor {} on second stage compressor",
+                compressor
+            );
+            Err(Error::UnknownCompressor(unknown))
+        }
     }
 }
 
@@ -253,17 +260,20 @@ fn decode_complex_instruction<R: Read>(r: &mut R) -> Result<(usize, Vec<ChunkInf
         r.read_exact(&mut buf)?;
         match instruction_header.section_type {
             HAP_SECITON_CHUNK_SECOND_STAGE_COMPRESSOR_TABLE => {
+                debug!("second stage compressor table buf: {:?}", buf);
                 compressors = buf
                     .into_iter()
                     .map(decode_second_stage_compressor)
                     .collect::<Result<Vec<_>, _>>()?;
             }
             HAP_SECTION_CHUNK_OFFSET_TABLE => {
+                debug!("chunk offset table buf: {:?}", buf);
                 for mut chunk_offset in buf.chunks(4) {
                     chunk_offsets.push(chunk_offset.read_u32::<LE>()?);
                 }
             }
             HAP_SECTION_CHUNK_SIZE_TABLE => {
+                debug!("chunk size table: {:?}", buf);
                 for mut chunk_size in buf.chunks(4) {
                     chunk_sizes.push(chunk_size.read_u32::<LE>()?);
                 }
@@ -323,6 +333,10 @@ fn decode_texture<R: Read>(raw_section: RawSection, r: &mut R) -> Result<(RawTex
         let mut decoder = snap::raw::Decoder::new();
         decoded_raw_data = decoder.decompress_vec(&buf).map_err(Error::Snappy)?;
     } else {
+        warn!(
+            "unknown compressor {} on texture",
+            raw_section.section_type & 0xf0
+        );
         return Err(Error::UnknownCompressor(raw_section.section_type & 0xF0));
     }
     Ok((decoded_raw_data, raw_section.section_type & 0x0F))
